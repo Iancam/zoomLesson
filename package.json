@@ -1,0 +1,20 @@
+{
+  "name": "zmlssn",
+  "version": "1.0.0",
+  "main": "src/index.js",
+  "license": "MIT",
+  "bin": {
+    "zmlssn": "./bin/zmlssn"
+  },
+  "dependencies": {
+    "dotenv": "^8.2.0",
+    "express": "^4.17.1",
+    "jsonwebtoken": "^8.5.1",
+    "lodash": "^4.17.21",
+    "moment": "^2.29.1",
+    "promise-ratelimit": "^0.0.3",
+    "readline-promise": "^1.0.5",
+    "request": "^2.88.2",
+    "request-promise": "^4.2.6"
+  }
+}
