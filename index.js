@@ -91,36 +91,40 @@ exports.run = async function ([command, name, ...rest]) {
   }[command](rest);
 };
 
-async function loadMeetings() {
-  const payload = {
-    iss: process.env.APIKey,
-    exp: new Date().getTime() + 60 * 60 * 1000,
-  };
+async function promptForCredentials() {
   const env = {
     me:
       process.env.me ??
-      ask("Your name is missing: what is your zoom full name?"),
+      (await ask("Your name is missing: what is your zoom full name?")),
     APIKey:
       process.env.APIKey ??
-      ask("APIKey missing: What is your zoom jwt api key?"),
+      (await ask("APIKey missing: What is your zoom jwt api key?")),
     APISecret:
       process.env.APISecret ??
-      ask("APISecret missing: What is your api secret?"),
+      (await ask("APISecret missing: What is your api secret?")),
     pmi:
-      process.env.pmi ?? ask("PMI missing: What is your personal meeting id?"),
+      process.env.pmi ??
+      (await ask("PMI missing: What is your personal meeting id?")),
   };
-  fs.appendFileSync(
+  fs.writeFileSync(
     __dirname + "/.env",
     entries(env)
       .map(([name, value]) => `${name}=${value}`)
       .join("\n")
   );
+}
 
+async function loadMeetings() {
+  await promptForCredentials();
+  const payload = {
+    iss: process.env.APIKey,
+    exp: new Date().getTime() + 60 * 60 * 1000,
+  };
   const meetingsPath = __dirname + "/meetings.json";
   const token = jwt.sign(payload, process.env.APISecret);
   const base = "https://api.zoom.us/v2";
-  const meeting = (meetingUUID) => `/past_meetings/${meetingUUID}`;
-  const participants = (meetingUUID) =>
+  const meetingUrl = (meetingUUID) => `/past_meetings/${meetingUUID}`;
+  const participantsUrl = (meetingUUID) =>
     `/past_meetings/${meetingUUID}/participants`;
 
   instances = (id) => `/past_meetings/${id}/instances`;
@@ -131,41 +135,35 @@ async function loadMeetings() {
   const cached = JSON.parse(fs.readFileSync(meetingsPath).toString());
   const ids = keys(cached);
 
-  return await rp(base + instances(process.env.pmi), opts).then(
-    async ({ meetings: meetingIds }) => {
-      uuids = meetingIds
-        .filter((m) => !ids.includes(m.uuid))
-        .map((m) =>
-          m.uuid.startsWith("/") ? encodeURIComponent(m.uuid) : m.uuid
-        );
-
-      const all = await Promise.all(
-        uuids.map(
-          async (uuid) =>
-            await Promise.all(
-              [participants(uuid), meeting(uuid)].map((url) =>
-                throttle().then(() => rp(base + url, opts).catch((err) => {}))
-              )
-            )
-        )
-      );
-
-      const flat = all
-        .map(([participants, details]) => ({
-          ...participants,
-          ...details,
-        }))
-        .filter((m) => m.uuid);
-      let meetings = [...values(cached), ...flat].map((entry) => ({
-        ...entry,
-        start_time: moment(entry.start_time),
-      }));
-      return {
-        meetings: keyBy(meetings, "uuid"),
-        save: (inp) => fs.writeFileSync(meetingsPath, JSON.stringify(inp)),
-      };
-    }
+  const { meetings: meetingIds } = await rp(
+    base + instances(process.env.pmi),
+    opts
   );
+  const uuids = meetingIds
+    .filter((m) => !ids.includes(m.uuid))
+    .map((m) => (m.uuid.startsWith("/") ? encodeURIComponent(m.uuid) : m.uuid));
+
+  const meetingPromise = async (uuid) =>
+    await Promise.all(
+      [participantsUrl(uuid), meetingUrl(uuid)].map((url) =>
+        throttle().then(() => rp(base + url, opts).catch((err) => {}))
+      )
+    );
+  const meetings = await Promise.all(uuids.map(meetingPromise));
+  const flat = meetings
+    .map(([participants, details]) => ({
+      ...participants,
+      ...details,
+    }))
+    .filter((m) => m.uuid);
+  const finalMeetings = [...values(cached), ...flat].map((entry) => ({
+    ...entry,
+    start_time: moment(entry.start_time),
+  }));
+  return {
+    meetings: keyBy(finalMeetings, "uuid"),
+    save: (inp) => fs.writeFileSync(meetingsPath, JSON.stringify(inp)),
+  };
 }
 
 function loadBills(lessons) {
