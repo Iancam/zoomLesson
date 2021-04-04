@@ -1,0 +1,4 @@
+# todos.txt
+remove personal username and pmi√
+add prompts for user name and pmi√
+update readme √
