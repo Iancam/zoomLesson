@@ -20,6 +20,21 @@ const ask = async (prompt) => {
 // const me = "Ian Campbell";
 // const pmi = `9361574590`;
 
+function dataFromMeeting(meeting) {
+  const { duration, start_time, participants, end, billedOn, uuid, client } =
+    meeting;
+  return {
+    ...meeting,
+    participants: uniq(
+      meeting.participants
+        .map((p) => p.name)
+        .filter((name) => name != process.env.me)
+    ),
+    billedOn,
+    client,
+  };
+}
+
 function displayMeeting(meeting) {
   const {
     duration,
@@ -28,26 +43,25 @@ function displayMeeting(meeting) {
     end_time,
     billedOn,
     uuid,
+    client,
   } = meeting;
   return {
     uuid,
     start_time,
     billedOn,
     start: moment(start_time).format("MMM Do YYYY [at] h:mm a"),
-    end: moment(end_time).format("MMM Do [at] h:mm a"),
-    participants: uniq(
-      participants.map((p) => p.name).filter((name) => name != process.env.me)
-    ),
+    end: moment(end_time).format("MMM Do YYYY [at] h:mm a"),
+    participants,
+    client,
     duration,
   };
 }
 
 const hasName = (prefix) => (meeting) => {
-  return meeting.participants.some(({ name }) =>
-    name
-      .split(" ")
-      .some((name) => name.toLowerCase().startsWith(prefix.toLowerCase()))
-  );
+  const thing = meeting.client
+    .split(" ")
+    .some((name) => name.toLowerCase().startsWith(prefix.toLowerCase()));
+  return thing;
 };
 
 exports.run = async function ([command, name, ...rest]) {
@@ -59,11 +73,25 @@ exports.run = async function ([command, name, ...rest]) {
       return a.start_time - b.start_time;
     });
   const commands = {
-    list: ([length]) => {
-      const duration = lessons
-        .slice(0, length)
-        .reduce((total, { duration }) => duration + total, 0);
-      console.log(lessons.slice(0, length));
+    list: ([b, length]) => {
+      const listLessons = lessons
+        .filter((l) => (b ? !l.billedOn : true))
+        .slice(0, length);
+
+      console.log(
+        listLessons.map(({ start, end, duration, client, participants }) => ({
+          start,
+          end,
+          duration,
+          client,
+          participants,
+        }))
+      );
+
+      const duration = listLessons.reduce(
+        (total, { duration }) => duration + total,
+        0
+      );
       console.log("total minutes:", duration);
     },
     bill: async ([timePivot]) => {
@@ -143,12 +171,14 @@ async function loadMeetings() {
     .filter((m) => !ids.includes(m.uuid))
     .map((m) => (m.uuid.startsWith("/") ? encodeURIComponent(m.uuid) : m.uuid));
 
+  console.log(`loading ${uuids.length} records from the api`);
   const meetingPromise = async (uuid) =>
     await Promise.all(
       [participantsUrl(uuid), meetingUrl(uuid)].map((url) =>
         throttle().then(() => rp(base + url, opts).catch((err) => {}))
       )
     );
+
   const meetings = await Promise.all(uuids.map(meetingPromise));
   const flat = meetings
     .map(([participants, details]) => ({
@@ -156,12 +186,30 @@ async function loadMeetings() {
       ...details,
     }))
     .filter((m) => m.uuid);
-  const finalMeetings = [...values(cached), ...flat].map((entry) => ({
-    ...entry,
-    start_time: moment(entry.start_time),
-  }));
+
+  const finalMeetings = [...values(cached), ...flat]
+    .map((entry) =>
+      uniq(
+        entry.participants
+          .filter((p) => p.name != process.env.me)
+          .map((p) => p.name)
+      )
+        .map((participant) => {
+          return {
+            ...entry,
+            client: participant,
+          };
+        })
+        .map(dataFromMeeting)
+    )
+    .flat()
+    .map((entry) => ({
+      ...entry,
+      start_time: moment(entry.start_time),
+    }));
+
   return {
-    meetings: keyBy(finalMeetings, "uuid"),
+    meetings: finalMeetings,
     save: (inp) => fs.writeFileSync(meetingsPath, JSON.stringify(inp)),
   };
 }
